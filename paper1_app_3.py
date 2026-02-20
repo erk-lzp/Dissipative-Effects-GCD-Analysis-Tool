@@ -23,7 +23,7 @@ def check_password():
         st.title("Login")
         password = st.text_input("Enter password", type="password")
 
-        if password == "Batman":
+        if password == "Battery":
             st.session_state.password_correct = True
             st.rerun()
         elif password != "":
