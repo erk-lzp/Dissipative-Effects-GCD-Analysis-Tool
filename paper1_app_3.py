@@ -304,8 +304,30 @@ def collect_normalization_inputs(device_type):
             active_mass_g = st.number_input("Active mass (g)",
                                             value=0.0004, format="%.6f")
         else:
-            electrolyte_volume_dm3 = st.number_input(
-                "Electrolyte volume (dm3)", value=0.0100, format="%.4f")
+            # Let the user pick the volume unit they actually measured in.
+            # The mL field is per pole (each electrode / half-cell), which
+            # is usually how flow-battery electrolyte is dispensed.
+            volume_unit = st.selectbox(
+                "Electrolyte volume unit",
+                ["dm3 (total)", "mL (each pole / electrode)"],
+            )
+
+            if volume_unit.startswith("mL"):
+                volume_ml_per_pole = st.number_input(
+                    "Electrolyte volume per pole (mL)",
+                    value=800.0, format="%.2f")
+                # mL -> dm3 (/1000), then x2 because there are two poles
+                # (anolyte + catholyte) and densities are reported on the
+                # total electrolyte volume.
+                electrolyte_volume_dm3 = (volume_ml_per_pole / 1000.0) * 2
+                st.caption(
+                    f"Total electrolyte volume used for normalization: "
+                    f"{electrolyte_volume_dm3:.4f} dm3"
+                )
+            else:
+                electrolyte_volume_dm3 = st.number_input(
+                    "Electrolyte volume (dm3, total)",
+                    value=0.0100, format="%.4f")
 
     return normalization_basis, active_mass_g, electrolyte_volume_dm3
 
