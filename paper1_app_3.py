@@ -335,9 +335,9 @@ def collect_normalization_inputs(device_type):
 # --- Main ------------------------------------------------------------------
 
 def main():
-    st.title("GCD-\u03b3 Analyzer")
-    st.caption("A tool for energy correction in electrochemical "
-               "energy storage devices")
+    st.title("GCD-\u03b3 Analyzer: A tool for energy correction in electrochemical energy storage devices)
+    #st.caption("A tool for energy correction in electrochemical "
+     #          "energy storage devices")
 
     uploaded_file = st.file_uploader("Upload CSV or Excel file",
                                      type=["csv", "xlsx"])
