@@ -1,13 +1,18 @@
 """
 GCD Analyzer
-------------
-A small Streamlit app for analyzing galvanostatic charge-discharge (GCD)
-curves. It works for both supercapacitors and batteries, computes the
-"gamma" shape factor of the discharge curve, and reports energy/power
-densities. It also draws an energy-region plot and a Ragone diagram.
+============
+Streamlit app for analyzing galvanostatic charge-discharge (GCD) curves.
 
-Run with:  streamlit run gcd_analyzer.py
+Handles both supercapacitors and battery-type devices. For a given discharge
+curve it computes the gamma shape factor, the real and ideal energy, and the
+corresponding power, then draws the energy-region plot and a Ragone point.
+Results (figures and a summary table) can be exported as PDF.
+
+Run with:
+    streamlit run gcd_analyzer.py
 """
+
+import io
 
 import numpy as np
 import pandas as pd
@@ -17,54 +22,55 @@ import streamlit as st
 
 st.set_page_config(page_title="GCD Analyzer", layout="centered")
 
-# A single place to change the password if needed, we used while we were testing
-# APP_PASSWORD = "Battery"
+
+# NumPy 2.0 renamed trapz -> trapezoid. Keep working on both old and new.
+try:
+    trapz = np.trapezoid
+except AttributeError:
+    trapz = np.trapz
 
 
-# Login 
-
-#def require_login():
-    #"""Ask for a password before showing anything else.
-
-    #We keep a flag in session_state so the user only has to log in once
-    #per session instead of on every rerun.
-    #"""
-    # First time we run, nobody is logged in yet.
- #   if "logged_in" not in st.session_state:
-     #   st.session_state.logged_in = False
-
-  #  if st.session_state.logged_in:
-    #    return
-
-   # st.title("Login")
-    #entered = st.text_input("Enter password", type="password")
-
-    #if entered == APP_PASSWORD:
-     #   st.session_state.logged_in = True
-     #   st.rerun()
-    #elif entered:
-        # Only complain once the user has actually typed something.
-      #  st.error("Incorrect password")
-
-    # Stop here until the password is correct.
-    #st.stop()
-
-
+# ---------------------------------------------------------------------------
 # File loading
+# ---------------------------------------------------------------------------
 
 def load_data(uploaded_file):
     """Read an uploaded CSV or Excel file into a DataFrame."""
-    if uploaded_file.name.lower().endswith(".csv"):
+    name = uploaded_file.name.lower()
+    if name.endswith(".csv"):
         return pd.read_csv(uploaded_file)
     return pd.read_excel(uploaded_file)
 
 
-# Labels and units 
-def get_units(device_type, normalization_basis):
-    """Pick the right names and units for the chosen device / basis.
+def clean_series(t, U):
+    """Drop NaNs and make sure time is increasing.
 
-    Supercapacitors and mass-normalized batteries are reported per kg.
-    Volume-normalized batteries are reported per liter of electrolyte.
+    Real exported files sometimes carry a trailing blank row or a stray
+    NaN, and occasionally the time column comes in reversed. We fix those
+    quietly rather than blowing up mid-calculation.
+    """
+    t = np.asarray(t, dtype=float)
+    U = np.asarray(U, dtype=float)
+
+    good = ~(np.isnan(t) | np.isnan(U))
+    t, U = t[good], U[good]
+
+    # If time runs backwards, flip both arrays together.
+    if len(t) > 1 and t[-1] < t[0]:
+        t, U = t[::-1], U[::-1]
+
+    return t, U
+
+
+# ---------------------------------------------------------------------------
+# Labels and units
+# ---------------------------------------------------------------------------
+
+def get_units(device_type, normalization_basis):
+    """Return the display names and units for the chosen device/basis.
+
+    Supercapacitors and mass-normalized batteries are per kg; a battery
+    normalized by electrolyte volume is reported per liter (dm3).
     """
     per_volume = (
         device_type == "Battery"
@@ -79,7 +85,6 @@ def get_units(device_type, normalization_basis):
             "power_unit": "W/dm3",
         }
 
-    # Default: gravimetric (per mass).
     return {
         "energy_name": "Specific energy",
         "power_name": "Specific power",
@@ -88,70 +93,52 @@ def get_units(device_type, normalization_basis):
     }
 
 
-# --- Core calculation ------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Core calculation
+# ---------------------------------------------------------------------------
 
 def calculate_metrics(t, U, current_A, device_type, normalization_basis,
                       active_mass_g=None, electrolyte_volume_dm3=None):
-    """Compute gamma, energy and power from a discharge curve.
+    """Compute gamma, energy and power from one discharge curve.
 
-    The idea: compare the real area under the voltage-time curve to an
-    "ideal" reference area. For a supercapacitor the ideal discharge is a
-    straight line (triangle); for a battery it's a flat plateau (rectangle).
-    Gamma is just the ratio of the two areas, so it tells you how close the
-    real curve is to that ideal shape.
-
-    Parameters
-    ----------
-    t, U : array-like
-        Time (s) and voltage (V) samples of the discharge.
-    current_A : float
-        Applied discharge current in amperes.
-    device_type : str
-        "Supercapacitor" or "Battery".
-    normalization_basis : str
-        "Active mass" or "Electrolyte volume" (batteries only).
-    active_mass_g, electrolyte_volume_dm3 : float
-        Whichever one matches the chosen normalization basis.
-
-    Returns
-    -------
-    dict of computed values.
+    The whole method rests on one comparison: the real area under the
+    measured voltage-time curve versus an ideal reference area. For a
+    supercapacitor the ideal discharge is a straight line down (a triangle);
+    for a battery it's a flat plateau (a rectangle). Gamma is the ratio of
+    real to ideal area, so gamma = 1 means the curve is a perfect match and
+    anything below that flags dissipation.
     """
-    # Total discharge duration and the voltage window.
     discharge_time = t[-1] - t[0]
     U_start = U[0]
     U_end = U[-1]
 
-    # Real area under the measured curve (trapezoidal integration).
-    area_real = np.trapz(U, t)
+    # Measured area, trapezoidal rule.
+    area_real = trapz(U, t)
 
-    # Ideal reference area depends on the expected discharge shape.
+    # Ideal reference area -- shape depends on the device.
     if device_type == "Supercapacitor":
-        # Linear ramp down -> triangle.
-        area_ideal = U_start * discharge_time / 2
+        area_ideal = U_start * discharge_time / 2      # triangle
     else:
-        # Flat plateau -> rectangle.
-        area_ideal = U_start * discharge_time
+        area_ideal = U_start * discharge_time          # rectangle
 
-    # Shape factor: 1.0 means the curve matches the ideal exactly.
     gamma = area_real / area_ideal
 
-    # Energy in joules:  E = I * integral(U dt).
+    # E = I * integral(U dt), still in joules at this point.
     energy_real_J = current_A * area_real
     energy_ideal_J = current_A * area_ideal
 
-    # Decide what we divide by to normalize (mass in kg, or volume in dm3).
+    # What we divide by: mass in kg, or volume already in dm3.
     if device_type == "Supercapacitor" or normalization_basis == "Active mass":
-        norm_factor = active_mass_g / 1000.0       # grams -> kg
+        norm_factor = active_mass_g / 1000.0           # g -> kg
     else:
-        norm_factor = electrolyte_volume_dm3        # already in dm3
+        norm_factor = electrolyte_volume_dm3
 
-    # Convert joules to watt-hours, then normalize.
+    # Joules -> watt-hours (/3600), then normalize.
     energy_real = (energy_real_J / 3600) / norm_factor
     energy_ideal = (energy_ideal_J / 3600) / norm_factor
     energy_corrected = gamma * energy_ideal
 
-    # Average power = energy / time (with time in hours).
+    # Average power over the discharge, time expressed in hours.
     discharge_time_h = discharge_time / 3600
     power_real = energy_real / discharge_time_h
 
@@ -169,19 +156,24 @@ def calculate_metrics(t, U, current_A, device_type, normalization_basis,
     }
 
 
-# --- Plots -----------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Plots
+# ---------------------------------------------------------------------------
 
-def plot_energy(t, U, device_type, discharge_time, U_start):
-    """Show the measured curve along with the ideal and 'lost' energy areas."""
+def build_energy_figure(t, U, device_type, discharge_time, U_start):
+    """Measured curve plus the ideal and 'lost' energy regions.
+
+    Returns the Figure so the caller can both show it and offer it for
+    download.
+    """
     fig, ax = plt.subplots(figsize=(7, 5))
 
-    # The actual measured discharge.
     ax.plot(t, U, color="black", linewidth=2, label="Experimental curve")
 
-    # Everything under the real curve is real (delivered) energy.
+    # Area under the real curve = energy actually delivered.
     ax.fill_between(t, U, color="#cce5ff", alpha=0.8, label="Real energy")
 
-    # Build the ideal curve over the same time span.
+    # Ideal curve on its own dense grid.
     t_ideal = np.linspace(0, discharge_time, 500)
     if device_type == "Supercapacitor":
         U_ideal = U_start * (1 - t_ideal / discharge_time)   # triangle
@@ -191,7 +183,7 @@ def plot_energy(t, U, device_type, discharge_time, U_start):
     ax.fill_between(t_ideal, U_ideal, color="#d4edda", alpha=0.5,
                     label="Ideal energy")
 
-    # The gap between ideal and real is the energy "lost" to non-ideality.
+    # Gap between ideal and real: the part lost to non-ideality.
     U_on_ideal_grid = np.interp(t_ideal, t, U)
     ax.fill_between(t_ideal, U_on_ideal_grid, U_ideal,
                     where=(U_ideal > U_on_ideal_grid),
@@ -201,11 +193,13 @@ def plot_energy(t, U, device_type, discharge_time, U_start):
     ax.set_ylabel("Voltage (V)")
     ax.grid(alpha=0.3)
     ax.legend()
-    st.pyplot(fig)
+    fig.tight_layout()
+    return fig
 
 
-def plot_ragone(energy_value, power_value, energy_unit, power_unit, device_name):
-    """Plot a single point on a log-log Ragone diagram (energy vs power)."""
+def build_ragone_figure(energy_value, power_value, energy_unit, power_unit,
+                        device_name):
+    """Single point on a log-log Ragone diagram (energy vs power)."""
     fig, ax = plt.subplots(figsize=(6, 5))
 
     ax.scatter(energy_value, power_value, s=120, marker="o")
@@ -214,20 +208,91 @@ def plot_ragone(energy_value, power_value, energy_unit, power_unit, device_name)
     # Ragone plots are conventionally log-log.
     ax.set_xscale("log")
     ax.set_yscale("log")
-
     ax.set_xlabel(f"Energy density ({energy_unit})")
     ax.set_ylabel(f"Power density ({power_unit})")
     ax.set_title("Ragone Plot")
     ax.grid(which="both", alpha=0.3)
-    st.pyplot(fig)
+    fig.tight_layout()
+    return fig
 
 
-# --- Results display -------------------------------------------------------
+def build_table_figure(results, units):
+    """Render the summary table as its own figure, so it can go to PDF.
+
+    Using a matplotlib table keeps the export dependency-free -- no need to
+    pull in reportlab or a LaTeX toolchain just to make one PDF.
+    """
+    rows = [
+        ["gamma", "-", f"{results['gamma']:.4f}"],
+        [f"Real {units['energy_name'].lower()}",
+         units["energy_unit"], f"{results['energy_real']:.4f}"],
+        [f"Ideal {units['energy_name'].lower()}",
+         units["energy_unit"], f"{results['energy_ideal']:.4f}"],
+        ["Corrected energy",
+         units["energy_unit"], f"{results['energy_corrected']:.4f}"],
+        [f"Real {units['power_name'].lower()}",
+         units["power_unit"], f"{results['power_real']:.4f}"],
+    ]
+
+    fig, ax = plt.subplots(figsize=(7, 2.2))
+    ax.axis("off")
+    table = ax.table(
+        cellText=rows,
+        colLabels=["Quantity", "Unit", "Value"],
+        loc="center",
+        cellLoc="left",
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(10)
+    table.scale(1, 1.4)
+    fig.tight_layout()
+    return fig
+
+
+def figure_to_pdf_bytes(fig):
+    """Serialize a matplotlib figure to PDF bytes for st.download_button."""
+    buffer = io.BytesIO()
+    fig.savefig(buffer, format="pdf", bbox_inches="tight")
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+def results_to_dataframe(results, units):
+    """Flat table of the numbers, handy for the CSV download."""
+    return pd.DataFrame(
+        {
+            "Quantity": [
+                "gamma",
+                f"Real {units['energy_name'].lower()}",
+                f"Ideal {units['energy_name'].lower()}",
+                "Corrected energy",
+                f"Real {units['power_name'].lower()}",
+            ],
+            "Unit": [
+                "-",
+                units["energy_unit"],
+                units["energy_unit"],
+                units["energy_unit"],
+                units["power_unit"],
+            ],
+            "Value": [
+                results["gamma"],
+                results["energy_real"],
+                results["energy_ideal"],
+                results["energy_corrected"],
+                results["power_real"],
+            ],
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
+# Results display
+# ---------------------------------------------------------------------------
 
 def display_results(results, units):
-    """Print the numeric results in a readable block."""
+    """Numeric results as a readable block."""
     st.subheader("Results")
-
     st.write(f"gamma = {results['gamma']:.4f}")
     st.write(f"Real {units['energy_name'].lower()}: "
              f"{results['energy_real']:.4f} {units['energy_unit']}")
@@ -240,30 +305,70 @@ def display_results(results, units):
 
 
 def generate_plots(t, U, results, units, device_type):
-    """Draw both figures one after the other."""
-    st.subheader("Energy visualization")
-    plot_energy(
+    """Draw both figures, show them, and offer PDF downloads."""
+    energy_fig = build_energy_figure(
         t=t,
         U=U,
         device_type=device_type,
         discharge_time=results["discharge_time"],
         U_start=results["U_start"],
     )
-
-    st.subheader("Ragone plot")
-    plot_ragone(
+    ragone_fig = build_ragone_figure(
         energy_value=results["energy_real"],
         power_value=results["power_real"],
         energy_unit=units["energy_unit"],
         power_unit=units["power_unit"],
         device_name=device_type,
     )
+    table_fig = build_table_figure(results, units)
+
+    st.subheader("Energy visualization")
+    st.pyplot(energy_fig)
+    st.download_button(
+        "Download energy plot (PDF)",
+        data=figure_to_pdf_bytes(energy_fig),
+        file_name="energy_plot.pdf",
+        mime="application/pdf",
+    )
+
+    st.subheader("Ragone plot")
+    st.pyplot(ragone_fig)
+    st.download_button(
+        "Download Ragone plot (PDF)",
+        data=figure_to_pdf_bytes(ragone_fig),
+        file_name="ragone_plot.pdf",
+        mime="application/pdf",
+    )
+
+    st.subheader("Summary table")
+    st.pyplot(table_fig)
+
+    # Two ways to grab the table: as a PDF (for the paper) or CSV (for reuse).
+    col_pdf, col_csv = st.columns(2)
+    with col_pdf:
+        st.download_button(
+            "Download table (PDF)",
+            data=figure_to_pdf_bytes(table_fig),
+            file_name="results_table.pdf",
+            mime="application/pdf",
+        )
+    with col_csv:
+        csv_bytes = results_to_dataframe(results, units).to_csv(
+            index=False).encode("utf-8")
+        st.download_button(
+            "Download table (CSV)",
+            data=csv_bytes,
+            file_name="results_table.csv",
+            mime="text/csv",
+        )
 
 
-# --- Input helpers ---------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Input helpers
+# ---------------------------------------------------------------------------
 
 def collect_basic_inputs():
-    """Two-column block for current, device type and column names."""
+    """Current, device type and the two column names, in two columns."""
     col1, col2 = st.columns(2)
 
     with col1:
@@ -280,10 +385,10 @@ def collect_basic_inputs():
 
 
 def collect_normalization_inputs(device_type):
-    """Ask for mass or electrolyte volume depending on the device.
+    """Ask for mass or electrolyte volume, depending on the device.
 
-    Returns (normalization_basis, active_mass_g, electrolyte_volume_dm3),
-    with the unused value left as None.
+    Returns (basis, active_mass_g, electrolyte_volume_dm3); the value that
+    doesn't apply stays None.
     """
     st.subheader("Normalization")
 
@@ -294,64 +399,67 @@ def collect_normalization_inputs(device_type):
     if device_type == "Supercapacitor":
         active_mass_g = st.number_input("Active mass (g)",
                                         value=0.0004, format="%.6f")
-    else:
-        normalization_basis = st.selectbox(
-            "Normalization basis",
-            ["Active mass", "Electrolyte volume"],
-        )
-        if normalization_basis == "Active mass":
-            active_mass_g = st.number_input("Active mass (g)",
-                                            value=0.0004, format="%.6f")
-        else:
-            # Let the user pick the volume unit they actually measured in.
-            # The mL field is per pole (each electrode / half-cell), which
-            # is usually how flow-battery electrolyte is dispensed.
-            volume_unit = st.selectbox(
-                "Electrolyte volume unit",
-                ["dm3 (total)", "mL (each pole / electrode)"],
-            )
+        return normalization_basis, active_mass_g, electrolyte_volume_dm3
 
-            if volume_unit.startswith("mL"):
-                volume_ml_per_pole = st.number_input(
-                    "Electrolyte volume per pole (mL)",
-                    value=800.0, format="%.2f")
-                # mL -> dm3 (/1000), then x2 because there are two poles
-                # (anolyte + catholyte) and densities are reported on the
-                # total electrolyte volume.
-                electrolyte_volume_dm3 = (volume_ml_per_pole / 1000.0) * 2
-                st.caption(
-                    f"Total electrolyte volume used for normalization: "
-                    f"{electrolyte_volume_dm3:.4f} dm3"
-                )
-            else:
-                electrolyte_volume_dm3 = st.number_input(
-                    "Electrolyte volume (dm3, total)",
-                    value=0.0100, format="%.4f")
+    # Battery: let the user choose how to normalize.
+    normalization_basis = st.selectbox(
+        "Normalization basis",
+        ["Active mass", "Electrolyte volume"],
+    )
+
+    if normalization_basis == "Active mass":
+        active_mass_g = st.number_input("Active mass (g)",
+                                        value=0.0004, format="%.6f")
+        return normalization_basis, active_mass_g, electrolyte_volume_dm3
+
+    # Volume basis. Flow-battery electrolyte is usually dispensed per pole,
+    # so we offer that and convert, but also accept a straight total volume.
+    volume_unit = st.selectbox(
+        "Electrolyte volume unit",
+        ["dm3 (total)", "mL (each pole / electrode)"],
+    )
+
+    if volume_unit.startswith("mL"):
+        volume_ml_per_pole = st.number_input(
+            "Electrolyte volume per pole (mL)",
+            value=800.0, format="%.2f")
+        # per pole -> dm3, times 2 for anolyte + catholyte, since the
+        # densities are reported on the total electrolyte volume.
+        electrolyte_volume_dm3 = (volume_ml_per_pole / 1000.0) * 2
+        st.caption(
+            f"Total electrolyte volume used for normalization: "
+            f"{electrolyte_volume_dm3:.4f} dm3"
+        )
+    else:
+        electrolyte_volume_dm3 = st.number_input(
+            "Electrolyte volume (dm3, total)",
+            value=0.0100, format="%.4f")
 
     return normalization_basis, active_mass_g, electrolyte_volume_dm3
 
 
-# --- Main ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 def main():
-    st.title("GCD-\u03b3 Analyzer: A tool for the precise evaluation of energy and power characteristics in electrochemical energy storage devices")
-    #st.caption("A tool for energy correction in electrochemical "
-     #          "energy storage devices")
+    st.title("GCD-\u03b3 Analyzer")
+    st.caption("Precise evaluation of energy and power characteristics "
+               "in electrochemical energy storage devices")
 
     uploaded_file = st.file_uploader("Upload CSV or Excel file",
                                      type=["csv", "xlsx"])
 
-    # Gather all settings up front so the layout stays stable.
+    # Collect every setting first so the page layout doesn't jump around.
     current_A, device_type, time_col, voltage_col = collect_basic_inputs()
     norm_basis, active_mass_g, electrolyte_volume_dm3 = \
         collect_normalization_inputs(device_type)
 
-    # Nothing to do until a file is provided.
     if uploaded_file is None:
         st.info("Please upload a CSV or Excel file to begin.")
         return
 
-    # Try to read the file and show a quick preview.
+    # Read the file and show a short preview.
     try:
         df = load_data(uploaded_file)
         st.subheader("Preview")
@@ -360,17 +468,22 @@ def main():
         st.error(f"Error reading file:\n{err}")
         return
 
-    # The heavy work only runs when the user clicks the button.
+    # Only crunch numbers once the user asks for it.
     if not st.button("Run analysis"):
         return
 
-    # Pull out the two columns we actually need.
+    # Grab the two columns we need.
     try:
         t = df[time_col].to_numpy()
         U = df[voltage_col].to_numpy()
     except KeyError:
         st.error("Column names not found. "
                  "Please verify the time and voltage columns.")
+        return
+
+    t, U = clean_series(t, U)
+    if len(t) < 2:
+        st.error("Not enough valid data points after cleaning.")
         return
 
     results = calculate_metrics(
@@ -390,5 +503,4 @@ def main():
 
 
 if __name__ == "__main__":
-    require_login()
     main()
