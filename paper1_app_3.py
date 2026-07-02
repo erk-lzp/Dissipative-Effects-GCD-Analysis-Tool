@@ -24,11 +24,11 @@ st.set_page_config(page_title="GCD Analyzer", layout="centered")
 # Login 
 
 #def require_login():
-    """Ask for a password before showing anything else.
+    #"""Ask for a password before showing anything else.
 
-    We keep a flag in session_state so the user only has to log in once
-    per session instead of on every rerun.
-    """
+    #We keep a flag in session_state so the user only has to log in once
+    #per session instead of on every rerun.
+    #"""
     # First time we run, nobody is logged in yet.
  #   if "logged_in" not in st.session_state:
      #   st.session_state.logged_in = False
