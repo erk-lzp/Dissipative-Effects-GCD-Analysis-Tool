@@ -17,8 +17,8 @@ import streamlit as st
 
 st.set_page_config(page_title="GCD Analyzer", layout="centered")
 
-# A single place to change the password if needed.
-APP_PASSWORD = "Battery"
+# A single place to change the password if needed, we used while we were testing
+# APP_PASSWORD = "Battery"
 
 
 # Login 
