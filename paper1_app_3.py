@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import streamlit as st
+import streamlit.components.v1 as components
 
 
 st.set_page_config(page_title="GCD Analyzer", layout="centered")
@@ -30,8 +31,63 @@ except AttributeError:
     trapz = np.trapz
 
 
-# File loading
+# ---------------------------------------------------------------------------
+# Print / PDF export of the interface
+# ---------------------------------------------------------------------------
+#
+# Streamlit renders in the browser, so the Python side can't "screenshot" the
+# page. The reliable way to capture the interface exactly as the user sees it
+# is the browser's own print-to-PDF. The button below opens that dialog; in
+# the dialog the user picks "Save as PDF". A bit of CSS trims Streamlit's
+# toolbar and the button itself from the printed page so the output is clean.
 
+_PRINT_CSS = """
+<style>
+@media print {
+    /* Hide Streamlit chrome that shouldn't appear in the exported PDF. */
+    header[data-testid="stHeader"],
+    #MainMenu,
+    footer,
+    [data-testid="stToolbar"],
+    .gcd-print-hide {
+        display: none !important;
+    }
+    /* Give the printed page a little breathing room. */
+    .block-container {
+        padding-top: 1rem !important;
+    }
+}
+</style>
+"""
+
+
+def enable_print_styles():
+    """Inject the print stylesheet once per page load."""
+    st.markdown(_PRINT_CSS, unsafe_allow_html=True)
+
+
+def print_button(label):
+    """A small button that opens the browser's print-to-PDF dialog.
+
+    Rendered as an HTML component because it needs to call window.print()
+    on the parent document, which plain Streamlit widgets can't do.
+    """
+    components.html(
+        f"""
+        <button onclick="window.parent.print()"
+                style="padding:0.45rem 1rem; font-size:0.9rem;
+                       border:1px solid #ccc; border-radius:0.4rem;
+                       background:#f5f5f5; cursor:pointer;">
+            {label}
+        </button>
+        """,
+        height=48,
+    )
+
+
+# ---------------------------------------------------------------------------
+# File loading
+# ---------------------------------------------------------------------------
 
 def load_data(uploaded_file):
     """Read an uploaded CSV or Excel file into a DataFrame."""
@@ -45,8 +101,8 @@ def clean_series(t, U):
     """Drop NaNs and make sure time is increasing.
 
     Real exported files sometimes carry a trailing blank row or a stray
-    NaN, and occasionally the time column comes in reversed. 
-    
+    NaN, and occasionally the time column comes in reversed. We fix those
+    quietly rather than blowing up mid-calculation.
     """
     t = np.asarray(t, dtype=float)
     U = np.asarray(U, dtype=float)
@@ -61,17 +117,17 @@ def clean_series(t, U):
     return t, U
 
 
-
+# ---------------------------------------------------------------------------
 # Labels and units
 # ---------------------------------------------------------------------------
 
 def get_units(device_type, normalization_basis):
     """Return the display names and units for the chosen device/basis.
 
-    Supercapacitors and mass-normalized batteries are per kg, a battery
-    normalized by electrolyte volume is reported per liter (dm^3).
+    Supercapacitors and mass-normalized batteries are per kg; a battery
+    normalized by electrolyte volume is reported per liter (dm3).
 
-    Three  of each unit are provided so it is right everywhere:
+    Three flavors of each unit are provided so it looks right everywhere:
       *_unit         -> plain ASCII, safe for CSV files
       *_unit_disp    -> Unicode superscript, for on-screen / PDF text
       *_unit_math    -> matplotlib mathtext, for plot axis labels
@@ -106,8 +162,8 @@ def get_units(device_type, normalization_basis):
 
 
 # ---------------------------------------------------------------------------
-# Core calculationn
-
+# Core calculation
+# ---------------------------------------------------------------------------
 
 def calculate_metrics(t, U, current_A, device_type, normalization_basis,
                       active_mass_g=None, electrolyte_volume_dm3=None):
@@ -115,10 +171,10 @@ def calculate_metrics(t, U, current_A, device_type, normalization_basis,
 
     The whole method rests on one comparison: the real area under the
     measured voltage-time curve versus an ideal reference area. For a
-    supercapacitor the ideal discharge is a straight line down (a triangle),
+    supercapacitor the ideal discharge is a straight line down (a triangle);
     for a battery it's a flat plateau (a rectangle). Gamma is the ratio of
     real to ideal area, so gamma = 1 means the curve is a perfect match and
-    anything below that correspondsto dissipation.
+    anything below that flags dissipation.
     """
     discharge_time = t[-1] - t[0]
     U_start = U[0]
@@ -168,7 +224,10 @@ def calculate_metrics(t, U, current_A, device_type, normalization_basis,
     }
 
 
+# ---------------------------------------------------------------------------
 # Plots
+# ---------------------------------------------------------------------------
+
 def build_energy_figure(t, U, device_type, discharge_time, U_start):
     """Measured curve plus the ideal and 'lost' energy regions.
 
@@ -227,6 +286,9 @@ def build_ragone_figure(energy_value, power_value, energy_unit, power_unit,
 
 def build_table_figure(results, units):
     """Render the summary table as its own figure, so it can go to PDF.
+
+    Using a matplotlib table keeps the export dependency-free -- no need to
+    pull in reportlab or a LaTeX toolchain just to make one PDF.
     """
     # Short symbolic labels, matching the table used in the manuscript.
     rows = [
@@ -263,6 +325,8 @@ def figure_to_pdf_bytes(fig):
 
 def results_to_dataframe(results, units):
     """Flat table of the numbers, handy for the CSV download."""
+    # The CSV is read on its own, away from the app, so spell things out
+    # and keep units ASCII (Wh dm-3) so they survive any spreadsheet import.
     return pd.DataFrame(
         {
             "Quantity": [
@@ -293,6 +357,7 @@ def results_to_dataframe(results, units):
 
 # ---------------------------------------------------------------------------
 # Results display
+# ---------------------------------------------------------------------------
 
 def display_results(results, units):
     """Numeric results as a readable block."""
@@ -367,8 +432,9 @@ def generate_plots(t, U, results, units, device_type):
         )
 
 
-
+# ---------------------------------------------------------------------------
 # Input helpers
+# ---------------------------------------------------------------------------
 
 def collect_basic_inputs():
     """Current, device type and the two column names, in two columns."""
@@ -390,7 +456,7 @@ def collect_basic_inputs():
 def collect_normalization_inputs(device_type):
     """Ask for mass or electrolyte volume, depending on the device.
 
-    Returns (basis, active_mass_g, electrolyte_volume_dm3), the value that
+    Returns (basis, active_mass_g, electrolyte_volume_dm3); the value that
     doesn't apply stays None.
     """
     st.subheader("Normalization")
@@ -441,11 +507,13 @@ def collect_normalization_inputs(device_type):
     return normalization_basis, active_mass_g, electrolyte_volume_dm3
 
 
-
+# ---------------------------------------------------------------------------
 # Main
-
+# ---------------------------------------------------------------------------
 
 def main():
+    enable_print_styles()
+
     st.title("GCD-\u03b3 Analyzer")
     st.caption("Precise evaluation of energy and power characteristics "
                "in electrochemical energy storage devices")
@@ -457,6 +525,13 @@ def main():
     current_A, device_type, time_col, voltage_col = collect_basic_inputs()
     norm_basis, active_mass_g, electrolyte_volume_dm3 = \
         collect_normalization_inputs(device_type)
+
+    # Export of the interface as-is (before any data is loaded). Wrapped in a
+    # container we can hide from the print itself so the button doesn't show.
+    with st.container():
+        st.markdown('<div class="gcd-print-hide">', unsafe_allow_html=True)
+        print_button("Save interface as PDF")
+        st.markdown('</div>', unsafe_allow_html=True)
 
     if uploaded_file is None:
         st.info("Please upload a CSV or Excel file to begin.")
@@ -475,7 +550,7 @@ def main():
     if not st.button("Run analysis"):
         return
 
-    #  the two columns we need.
+    # Grab the two columns we need.
     try:
         t = df[time_col].to_numpy()
         U = df[voltage_col].to_numpy()
@@ -503,6 +578,12 @@ def main():
 
     display_results(results, units)
     generate_plots(t, U, results, units, device_type)
+
+    # Export of the full page after analysis: preview + results + plots,
+    # exactly as shown on screen.
+    st.markdown('<div class="gcd-print-hide">', unsafe_allow_html=True)
+    print_button("Save full results page as PDF")
+    st.markdown('</div>', unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
