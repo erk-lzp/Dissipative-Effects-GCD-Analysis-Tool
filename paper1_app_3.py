@@ -30,9 +30,8 @@ except AttributeError:
     trapz = np.trapz
 
 
-# ---------------------------------------------------------------------------
 # File loading
-# ---------------------------------------------------------------------------
+
 
 def load_data(uploaded_file):
     """Read an uploaded CSV or Excel file into a DataFrame."""
@@ -46,8 +45,8 @@ def clean_series(t, U):
     """Drop NaNs and make sure time is increasing.
 
     Real exported files sometimes carry a trailing blank row or a stray
-    NaN, and occasionally the time column comes in reversed. We fix those
-    quietly rather than blowing up mid-calculation.
+    NaN, and occasionally the time column comes in reversed. 
+    
     """
     t = np.asarray(t, dtype=float)
     U = np.asarray(U, dtype=float)
@@ -62,15 +61,20 @@ def clean_series(t, U):
     return t, U
 
 
-# ---------------------------------------------------------------------------
+
 # Labels and units
 # ---------------------------------------------------------------------------
 
 def get_units(device_type, normalization_basis):
     """Return the display names and units for the chosen device/basis.
 
-    Supercapacitors and mass-normalized batteries are per kg; a battery
-    normalized by electrolyte volume is reported per liter (dm3).
+    Supercapacitors and mass-normalized batteries are per kg, a battery
+    normalized by electrolyte volume is reported per liter (dm^3).
+
+    Three  of each unit are provided so it is right everywhere:
+      *_unit         -> plain ASCII, safe for CSV files
+      *_unit_disp    -> Unicode superscript, for on-screen / PDF text
+      *_unit_math    -> matplotlib mathtext, for plot axis labels
     """
     per_volume = (
         device_type == "Battery"
@@ -81,21 +85,29 @@ def get_units(device_type, normalization_basis):
         return {
             "energy_name": "Volumetric energy density",
             "power_name": "Volumetric power density",
-            "energy_unit": "Wh/dm3",
-            "power_unit": "W/dm3",
+            "energy_unit": "Wh dm-3",
+            "power_unit": "W dm-3",
+            "energy_unit_disp": "Wh dm\u207b\u00b3",
+            "power_unit_disp": "W dm\u207b\u00b3",
+            "energy_unit_math": r"$\mathrm{Wh\,dm^{-3}}$",
+            "power_unit_math": r"$\mathrm{W\,dm^{-3}}$",
         }
 
     return {
         "energy_name": "Specific energy",
         "power_name": "Specific power",
-        "energy_unit": "Wh/kg",
-        "power_unit": "W/kg",
+        "energy_unit": "Wh kg-1",
+        "power_unit": "W kg-1",
+        "energy_unit_disp": "Wh kg\u207b\u00b9",
+        "power_unit_disp": "W kg\u207b\u00b9",
+        "energy_unit_math": r"$\mathrm{Wh\,kg^{-1}}$",
+        "power_unit_math": r"$\mathrm{W\,kg^{-1}}$",
     }
 
 
 # ---------------------------------------------------------------------------
-# Core calculation
-# ---------------------------------------------------------------------------
+# Core calculationn
+
 
 def calculate_metrics(t, U, current_A, device_type, normalization_basis,
                       active_mass_g=None, electrolyte_volume_dm3=None):
@@ -103,10 +115,10 @@ def calculate_metrics(t, U, current_A, device_type, normalization_basis,
 
     The whole method rests on one comparison: the real area under the
     measured voltage-time curve versus an ideal reference area. For a
-    supercapacitor the ideal discharge is a straight line down (a triangle);
+    supercapacitor the ideal discharge is a straight line down (a triangle),
     for a battery it's a flat plateau (a rectangle). Gamma is the ratio of
     real to ideal area, so gamma = 1 means the curve is a perfect match and
-    anything below that flags dissipation.
+    anything below that correspondsto dissipation.
     """
     discharge_time = t[-1] - t[0]
     U_start = U[0]
@@ -156,10 +168,7 @@ def calculate_metrics(t, U, current_A, device_type, normalization_basis,
     }
 
 
-# ---------------------------------------------------------------------------
 # Plots
-# ---------------------------------------------------------------------------
-
 def build_energy_figure(t, U, device_type, discharge_time, U_start):
     """Measured curve plus the ideal and 'lost' energy regions.
 
@@ -210,7 +219,7 @@ def build_ragone_figure(energy_value, power_value, energy_unit, power_unit,
     ax.set_yscale("log")
     ax.set_xlabel(f"Energy density ({energy_unit})")
     ax.set_ylabel(f"Power density ({power_unit})")
-    ax.set_title("Ragone Plot")
+    ax.set_title("Ragone plot")
     ax.grid(which="both", alpha=0.3)
     fig.tight_layout()
     return fig
@@ -218,20 +227,15 @@ def build_ragone_figure(energy_value, power_value, energy_unit, power_unit,
 
 def build_table_figure(results, units):
     """Render the summary table as its own figure, so it can go to PDF.
-
-    Using a matplotlib table keeps the export dependency-free -- no need to
-    pull in reportlab or a LaTeX toolchain just to make one PDF.
     """
+    # Short symbolic labels, matching the table used in the manuscript.
     rows = [
-        ["gamma", "-", f"{results['gamma']:.4f}"],
-        [f"Real {units['energy_name'].lower()}",
-         units["energy_unit"], f"{results['energy_real']:.4f}"],
-        [f"Ideal {units['energy_name'].lower()}",
-         units["energy_unit"], f"{results['energy_ideal']:.4f}"],
-        ["Corrected energy",
-         units["energy_unit"], f"{results['energy_corrected']:.4f}"],
-        [f"Real {units['power_name'].lower()}",
-         units["power_unit"], f"{results['power_real']:.4f}"],
+        ["\u03b3", "-", f"{results['gamma']:.4f}"],
+        ["E_real", units["energy_unit_disp"], f"{results['energy_real']:.4f}"],
+        ["E_ideal", units["energy_unit_disp"], f"{results['energy_ideal']:.4f}"],
+        ["\u27e8E\u27e9", units["energy_unit_disp"],
+         f"{results['energy_corrected']:.4f}"],
+        ["P_real", units["power_unit_disp"], f"{results['power_real']:.4f}"],
     ]
 
     fig, ax = plt.subplots(figsize=(7, 2.2))
@@ -262,12 +266,13 @@ def results_to_dataframe(results, units):
     return pd.DataFrame(
         {
             "Quantity": [
-                "gamma",
+                "gamma (deviation coefficient)",
                 f"Real {units['energy_name'].lower()}",
                 f"Ideal {units['energy_name'].lower()}",
-                "Corrected energy",
+                "Corrected energy (gamma x E_ideal)",
                 f"Real {units['power_name'].lower()}",
             ],
+            "Symbol": ["gamma", "E_real", "E_ideal", "<E>", "P_real"],
             "Unit": [
                 "-",
                 units["energy_unit"],
@@ -288,20 +293,19 @@ def results_to_dataframe(results, units):
 
 # ---------------------------------------------------------------------------
 # Results display
-# ---------------------------------------------------------------------------
 
 def display_results(results, units):
     """Numeric results as a readable block."""
     st.subheader("Results")
-    st.write(f"gamma = {results['gamma']:.4f}")
+    st.write(f"\u03b3 = {results['gamma']:.4f}")
     st.write(f"Real {units['energy_name'].lower()}: "
-             f"{results['energy_real']:.4f} {units['energy_unit']}")
+             f"{results['energy_real']:.4f} {units['energy_unit_disp']}")
     st.write(f"Ideal {units['energy_name'].lower()}: "
-             f"{results['energy_ideal']:.4f} {units['energy_unit']}")
-    st.write(f"Corrected energy (gamma x E_ideal): "
-             f"{results['energy_corrected']:.4f} {units['energy_unit']}")
+             f"{results['energy_ideal']:.4f} {units['energy_unit_disp']}")
+    st.write(f"Corrected energy (\u03b3 \u00d7 E_ideal): "
+             f"{results['energy_corrected']:.4f} {units['energy_unit_disp']}")
     st.write(f"Real {units['power_name'].lower()}: "
-             f"{results['power_real']:.4f} {units['power_unit']}")
+             f"{results['power_real']:.4f} {units['power_unit_disp']}")
 
 
 def generate_plots(t, U, results, units, device_type):
@@ -316,8 +320,8 @@ def generate_plots(t, U, results, units, device_type):
     ragone_fig = build_ragone_figure(
         energy_value=results["energy_real"],
         power_value=results["power_real"],
-        energy_unit=units["energy_unit"],
-        power_unit=units["power_unit"],
+        energy_unit=units["energy_unit_math"],
+        power_unit=units["power_unit_math"],
         device_name=device_type,
     )
     table_fig = build_table_figure(results, units)
@@ -363,9 +367,8 @@ def generate_plots(t, U, results, units, device_type):
         )
 
 
-# ---------------------------------------------------------------------------
+
 # Input helpers
-# ---------------------------------------------------------------------------
 
 def collect_basic_inputs():
     """Current, device type and the two column names, in two columns."""
@@ -387,7 +390,7 @@ def collect_basic_inputs():
 def collect_normalization_inputs(device_type):
     """Ask for mass or electrolyte volume, depending on the device.
 
-    Returns (basis, active_mass_g, electrolyte_volume_dm3); the value that
+    Returns (basis, active_mass_g, electrolyte_volume_dm3), the value that
     doesn't apply stays None.
     """
     st.subheader("Normalization")
@@ -438,9 +441,9 @@ def collect_normalization_inputs(device_type):
     return normalization_basis, active_mass_g, electrolyte_volume_dm3
 
 
-# ---------------------------------------------------------------------------
+
 # Main
-# ---------------------------------------------------------------------------
+
 
 def main():
     st.title("GCD-\u03b3 Analyzer")
@@ -472,7 +475,7 @@ def main():
     if not st.button("Run analysis"):
         return
 
-    # Grab the two columns we need.
+    #  the two columns we need.
     try:
         t = df[time_col].to_numpy()
         U = df[voltage_col].to_numpy()
