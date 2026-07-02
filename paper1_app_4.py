@@ -21,7 +21,7 @@ st.set_page_config(page_title="GCD Analyzer", layout="centered")
 APP_PASSWORD = "Battery"
 
 
-# --- Login -----------------------------------------------------------------
+# Login 
 
 def require_login():
     """Ask for a password before showing anything else.
@@ -50,7 +50,7 @@ def require_login():
     st.stop()
 
 
-# --- File loading ----------------------------------------------------------
+# File loading
 
 def load_data(uploaded_file):
     """Read an uploaded CSV or Excel file into a DataFrame."""
@@ -59,8 +59,7 @@ def load_data(uploaded_file):
     return pd.read_excel(uploaded_file)
 
 
-# --- Labels and units ------------------------------------------------------
-
+# Labels and units 
 def get_units(device_type, normalization_basis):
     """Pick the right names and units for the chosen device / basis.
 
@@ -335,7 +334,7 @@ def collect_normalization_inputs(device_type):
 # --- Main ------------------------------------------------------------------
 
 def main():
-    st.title("GCD-\u03b3 Analyzer: A tool for energy correction in electrochemical energy storage devices")
+    st.title("GCD-\u03b3 Analyzer: A tool for the precise evaluation of energy and power characteristics in electrochemical energy storage devices")
     #st.caption("A tool for energy correction in electrochemical "
      #          "energy storage devices")
 
