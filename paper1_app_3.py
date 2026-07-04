@@ -1,15 +1,12 @@
-"""
-GCD Analyzer
-============
+"""GCD Analyzer
 Streamlit app for analyzing galvanostatic charge-discharge (GCD) curves.
 
 Handles both supercapacitors and battery-type devices. For a given discharge
-curve it computes the gamma shape factor, the real and ideal energy, and the
-corresponding power, then draws the energy-region plot and a Ragone point.
+curve it computes the gamma factor, the real and ideal energy, and the
+corresponding power, then draws the energy region plot and a Ragone plot.
 Results (figures and a summary table) can be exported as PDF.
 
-Run with:
-    streamlit run gcd_analyzer.py
+Run with: streamlit run gcd_analyzer.py
 """
 
 import io
@@ -24,22 +21,17 @@ import streamlit.components.v1 as components
 st.set_page_config(page_title="GCD Analyzer", layout="centered")
 
 
-# NumPy 2.0 renamed trapz -> trapezoid. Keep working on both old and new.
+# NumPy 2.0 renamed trapz to trapezoid. so it can Keep working on both old and new.
 try:
     trapz = np.trapezoid
 except AttributeError:
     trapz = np.trapz
 
 
-# ---------------------------------------------------------------------------
+
 # Print / PDF export of the interface
-# ---------------------------------------------------------------------------
-#
-# Streamlit renders in the browser, so the Python side can't "screenshot" the
-# page. The reliable way to capture the interface exactly as the user sees it
-# is the browser's own print-to-PDF. The button below opens that dialog; in
-# the dialog the user picks "Save as PDF". A bit of CSS trims Streamlit's
-# toolbar and the button itself from the printed page so the output is clean.
+# 
+
 
 _PRINT_CSS = """
 <style>
@@ -65,7 +57,6 @@ def enable_print_styles():
     """Inject the print stylesheet once per page load."""
     st.markdown(_PRINT_CSS, unsafe_allow_html=True)
 
-
 def print_button(label):
     """A small button that opens the browser's print-to-PDF dialog.
 
@@ -85,9 +76,7 @@ def print_button(label):
     )
 
 
-# ---------------------------------------------------------------------------
 # File loading
-# ---------------------------------------------------------------------------
 
 def load_data(uploaded_file):
     """Read an uploaded CSV or Excel file into a DataFrame."""
@@ -117,16 +106,14 @@ def clean_series(t, U):
     return t, U
 
 
-# ---------------------------------------------------------------------------
+
 # Labels and units
-# ---------------------------------------------------------------------------
 
 def get_units(device_type, normalization_basis):
     """Return the display names and units for the chosen device/basis.
 
-    Supercapacitors and mass-normalized batteries are per kg; a battery
+    Supercapacitors and mass-normalized batteries are per kg, a battery
     normalized by electrolyte volume is reported per liter (dm3).
-
     Three flavors of each unit are provided so it looks right everywhere:
       *_unit         -> plain ASCII, safe for CSV files
       *_unit_disp    -> Unicode superscript, for on-screen / PDF text
@@ -161,20 +148,12 @@ def get_units(device_type, normalization_basis):
     }
 
 
-# ---------------------------------------------------------------------------
 # Core calculation
 # ---------------------------------------------------------------------------
 
 def calculate_metrics(t, U, current_A, device_type, normalization_basis,
                       active_mass_g=None, electrolyte_volume_dm3=None):
     """Compute gamma, energy and power from one discharge curve.
-
-    The whole method rests on one comparison: the real area under the
-    measured voltage-time curve versus an ideal reference area. For a
-    supercapacitor the ideal discharge is a straight line down (a triangle);
-    for a battery it's a flat plateau (a rectangle). Gamma is the ratio of
-    real to ideal area, so gamma = 1 means the curve is a perfect match and
-    anything below that flags dissipation.
     """
     discharge_time = t[-1] - t[0]
     U_start = U[0]
@@ -224,15 +203,11 @@ def calculate_metrics(t, U, current_A, device_type, normalization_basis,
     }
 
 
-# ---------------------------------------------------------------------------
+
 # Plots
-# ---------------------------------------------------------------------------
 
 def build_energy_figure(t, U, device_type, discharge_time, U_start):
     """Measured curve plus the ideal and 'lost' energy regions.
-
-    Returns the Figure so the caller can both show it and offer it for
-    download.
     """
     fig, ax = plt.subplots(figsize=(7, 5))
 
@@ -286,9 +261,6 @@ def build_ragone_figure(energy_value, power_value, energy_unit, power_unit,
 
 def build_table_figure(results, units):
     """Render the summary table as its own figure, so it can go to PDF.
-
-    Using a matplotlib table keeps the export dependency-free -- no need to
-    pull in reportlab or a LaTeX toolchain just to make one PDF.
     """
     # Short symbolic labels, matching the table used in the manuscript.
     rows = [
@@ -355,9 +327,8 @@ def results_to_dataframe(results, units):
     )
 
 
-# ---------------------------------------------------------------------------
+
 # Results display
-# ---------------------------------------------------------------------------
 
 def display_results(results, units):
     """Numeric results as a readable block."""
@@ -431,10 +402,8 @@ def generate_plots(t, U, results, units, device_type):
             mime="text/csv",
         )
 
-
-# ---------------------------------------------------------------------------
 # Input helpers
-# ---------------------------------------------------------------------------
+
 
 def collect_basic_inputs():
     """Current, device type and the two column names, in two columns."""
@@ -507,9 +476,9 @@ def collect_normalization_inputs(device_type):
     return normalization_basis, active_mass_g, electrolyte_volume_dm3
 
 
-# ---------------------------------------------------------------------------
+
 # Main
-# ---------------------------------------------------------------------------
+
 
 def main():
     enable_print_styles()
