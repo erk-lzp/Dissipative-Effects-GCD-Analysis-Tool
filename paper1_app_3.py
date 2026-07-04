@@ -1,7 +1,7 @@
 """GCD Analyzer
 Streamlit app for analyzing galvanostatic charge-discharge (GCD) curves.
 
-Handles both supercapacitors and battery-type devices. For a given discharge
+Handles electrochemical energy storage devices. For a given discharge
 curve it computes the gamma factor, the real and ideal energy, and the
 corresponding power, then draws the energy region plot and a Ragone plot.
 Results (figures and a summary table) can be exported as PDF.
